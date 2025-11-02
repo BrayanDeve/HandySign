@@ -1,2 +1,2 @@
 # HandySign 
-Subindo
+Subindo terminal
