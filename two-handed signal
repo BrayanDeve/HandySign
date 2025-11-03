@@ -15,7 +15,7 @@ sign_images = {
 }
 
 ICON_SIZE = 80
-GESTURE_THRESHOLD = 4  # Frames consecutivos para validar
+GESTURE_THRESHOLD = 5  # Frames consecutivos para validar
 
 # Posições dos ícones por mão (esquerda e direita)
 icon_positions = {
@@ -145,6 +145,12 @@ with mp_hands.Hands(
                 gesture_detected = detect_gesture(hand_landmarks.landmark)
                 if gesture_detected:
                     gesture_buffers[label] = gesture_detected
+        else:
+            # Nenhuma mão detectada → limpa gestos imediatamente
+            gestures["Left"] = None
+            gestures["Right"] = None
+            gesture_counters["Left"] = 0
+            gesture_counters["Right"] = 0
 
         # Lógica de estabilidade por mão
         for hand_label in ["Left", "Right"]:
