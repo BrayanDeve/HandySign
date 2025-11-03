@@ -17,7 +17,7 @@ sign_images = {
 ICON_SIZE = 80
 GESTURE_THRESHOLD = 5  # Frames consecutivos para validar
 
-# Posições dos ícones por mão (esquerda e direita)
+# Posições dos ícones por mão (left e right)
 icon_positions = {
     "Left": {
         "Like": (20, 20),
