@@ -1,0 +1,181 @@
+import cv2
+import mediapipe as mp
+import numpy as np
+
+mp_hands = mp.solutions.hands
+mp_drawing = mp.solutions.drawing_utils
+cap = cv2.VideoCapture(0)
+
+# Carrega imagens dos sinais (PNG com fundo transparente)
+sign_images = {
+    "Like": cv2.imread("icons/like.png", cv2.IMREAD_UNCHANGED),
+    "Dislike": cv2.imread("icons/dislike.png", cv2.IMREAD_UNCHANGED),
+    "OK": cv2.imread("icons/ok.png", cv2.IMREAD_UNCHANGED),
+    "Stop": cv2.imread("icons/stop.png", cv2.IMREAD_UNCHANGED)
+}
+
+ICON_SIZE = 80
+GESTURE_THRESHOLD = 4  # Frames consecutivos para validar
+
+# Posições dos ícones por mão (esquerda e direita)
+icon_positions = {
+    "Left": {
+        "Like": (20, 20),
+        "Dislike": (20, 120),
+        "OK": (20, 220),
+        "Stop": (20, 320),
+    },
+    "Right": {
+        "Like": (520, 20),
+        "Dislike": (520, 120),
+        "OK": (520, 220),
+        "Stop": (520, 320),
+    },
+}
+
+# --- Variáveis de controle por mão ---
+gestures = {"Left": None, "Right": None}
+gesture_buffers = {"Left": None, "Right": None}
+gesture_counters = {"Left": 0, "Right": 0}
+
+
+def overlay_image(frame, img, x, y):
+    """Sobrepõe PNG com transparência sobre o frame"""
+    h, w, _ = img.shape
+    for i in range(h):
+        for j in range(w):
+            if img[i, j, 3] != 0:
+                if 0 <= y+i < frame.shape[0] and 0 <= x+j < frame.shape[1]:
+                    frame[y+i, x+j] = img[i, j, :3]
+    return frame
+
+
+def distance(a, b):
+    return np.sqrt((a.x - b.x)**2 + (a.y - b.y)**2)
+
+
+def detect_gesture(landmarks):
+    thumb = [landmarks[i] for i in range(1, 5)]
+    fingers = [landmarks[8], landmarks[12], landmarks[16], landmarks[20]]
+
+    # Verifica se todos os dedos exceto polegar estão fechados
+    fingers_closed = all([f.y > landmarks[i].y for f, i in zip(fingers, [6, 10, 14, 18])])
+
+    if fingers_closed:
+        if thumb[3].y < thumb[0].y:
+            return "Like"
+        elif thumb[3].y > thumb[0].y:
+            return "Dislike"
+
+    # OK: polegar e indicador se tocam
+    if distance(landmarks[4], landmarks[8]) < 0.05:
+        return "OK"
+
+    # Stop: todos os dedos abertos
+    all_fingers_up = all([
+        landmarks[8].y < landmarks[6].y,
+        landmarks[12].y < landmarks[10].y,
+        landmarks[16].y < landmarks[14].y,
+        landmarks[20].y < landmarks[18].y
+    ])
+    if all_fingers_up:
+        return "Stop"
+
+    return None
+
+
+def draw_text_box(frame, text, position, color_bg, color_text=(255,255,255), alpha=0.6):
+    """Desenha texto com fundo semitransparente"""
+    overlay = frame.copy()
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    scale = 0.8
+    thickness = 2
+    (text_w, text_h), _ = cv2.getTextSize(text, font, scale, thickness)
+    x, y = position
+
+    # Fundo com transparência
+    cv2.rectangle(overlay, (x - 10, y - text_h - 10), (x + text_w + 10, y + 10), color_bg, -1)
+    cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+
+    # Texto por cima
+    cv2.putText(frame, text, (x, y), font, scale, color_text, thickness)
+
+
+with mp_hands.Hands(
+    max_num_hands=2,
+    min_detection_confidence=0.7,
+    min_tracking_confidence=0.5
+) as hands:
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        frame = cv2.flip(frame, 1)
+        h_f, w_f, _ = frame.shape
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = hands.process(rgb)
+
+        # Reset buffers
+        gesture_buffers = {"Left": None, "Right": None}
+
+        if results.multi_hand_landmarks and results.multi_handedness:
+            for hand_landmarks, handedness_data in zip(
+                results.multi_hand_landmarks, results.multi_handedness
+            ):
+                label = handedness_data.classification[0].label  # "Left" ou "Right"
+
+                mp_drawing.draw_landmarks(
+                    frame, hand_landmarks, mp_hands.HAND_CONNECTIONS
+                )
+
+                x = int(hand_landmarks.landmark[0].x * w_f)
+                y = int(hand_landmarks.landmark[0].y * h_f)
+                cv2.putText(
+                    frame,
+                    label,
+                    (x - 20, y - 20),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1,
+                    (0, 255, 0) if label == "Left" else (0, 150, 255),
+                    2,
+                )
+
+                # Detecta gesto e guarda no buffer da mão correspondente
+                gesture_detected = detect_gesture(hand_landmarks.landmark)
+                if gesture_detected:
+                    gesture_buffers[label] = gesture_detected
+
+        # Lógica de estabilidade por mão
+        for hand_label in ["Left", "Right"]:
+            buffer = gesture_buffers[hand_label]
+            if buffer == gestures[hand_label]:
+                gesture_counters[hand_label] = 0
+            elif buffer is not None:
+                gesture_counters[hand_label] += 1
+                if gesture_counters[hand_label] >= GESTURE_THRESHOLD:
+                    gestures[hand_label] = buffer
+                    gesture_counters[hand_label] = 0
+            else:
+                gesture_counters[hand_label] = 0
+
+        # Ícones separados por lado da tela (esquerda/direita)
+        for hand_label, color in [("Left", (0, 255, 0)), ("Right", (0, 150, 255))]:
+            for gesture_name, pos in icon_positions[hand_label].items():
+                x, y = pos
+                bg_color = color if gestures[hand_label] == gesture_name else (50, 50, 50)
+                cv2.rectangle(frame, (x-5, y-5),
+                              (x+ICON_SIZE+5, y+ICON_SIZE+5), bg_color, -1)
+                icon = cv2.resize(sign_images[gesture_name], (ICON_SIZE, ICON_SIZE))
+                frame = overlay_image(frame, icon, x, y)
+
+        # Legendas com fundo translúcido e cores correspondentes
+        draw_text_box(frame, f"Left: {gestures['Left']}", (20, h_f - 40), (0, 180, 0))
+        draw_text_box(frame, f"Right: {gestures['Right']}", (w_f - 250, h_f - 40), (0, 120, 255))
+
+        cv2.imshow("Hand & Gesture Tracker", frame)
+        if cv2.waitKey(1) & 0xFF == 27:
+            break
+
+cap.release()
+cv2.destroyAllWindows()
